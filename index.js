@@ -23,9 +23,25 @@ import chalk from 'chalk';
 import filesize from 'filesize';
 import prettyMs from 'pretty-ms';
 
+const SETTINGS = {
+  /**
+   * Sometimes there are too many for console output
+   *
+   * @type {boolean}
+   */
+  hideChunks: true,
+
+  /**
+   * detection dep manager in monorepo workspace is not implemented
+   *
+   * @type {'npm' | 'yarn'}
+   */
+  forceDepManager: 'yarn',
+};
+
 const TERSER = 'ember-cli-terser';
 const ESBUILD = 'ember-cli-esbuild-minifier';
-const SWC = 'ember-cli-swc-minifier'; // pending
+const SWC = 'ember-cli-swc-minifier';
 
 const CWD = process.cwd();
 const appBuildFile = path.join(CWD, 'ember-cli-build.js');
@@ -59,19 +75,38 @@ const SCENARIOS = [
     minifier: ESBUILD,
     appConfig: {},
   },
+  {
+    name: 'Default SWC',
+    minifier: SWC,
+    appConfig: {},
+  },
 ];
+
+/**
+ * @typedef {Record<string, number>} SizeInfo;
+ *
+ * @typedef {Object} Result;
+ * @property {number} time;
+ * @property {SizeInfo} sizes;
+ *
+ * @typedef {Record<string, Result>} Results;
+ *
+ *
+ */
 
 async function run() {
   let depManager = await detectDependencyManager();
+  /* @type {Results} */
   let results = {};
 
-  await ensureClassicBuild();
+  // await ensureClassicBuild();
 
   for (let scenario of SCENARIOS) {
     announce(`Scenario: ${scenario.name}`);
 
     try {
       await removeMinifiers();
+      await removeDist();
       await addDependency(scenario.minifier);
       await applyConfig(scenario.appConfig);
       await installDependencies(depManager);
@@ -102,25 +137,89 @@ await run();
  *
  */
 
+function twoDecimals(num) {
+  return Math.round(num * 100) / 100;
+}
+
+function deltaPercent(min, current) {
+  let diff = twoDecimals((current / min - 1) * 100);
+
+  return `${diff < 0 ? '' : '+'}${diff}%`;
+}
+
+/**
+ * @param {Array<Result>} collection
+ * @param {(result: Result) => number} selector
+ *
+ * @returns {number}
+ */
+function minOf(collection, selector) {
+  return Math.min(...collection.map(selector));
+}
+
+/**
+ * @param {string} filePath
+ */
+function assertShortName(filePath) {
+  let shortPath = filePath.split('dist/assets/')[1];
+  let extParts = shortPath.split('.');
+  let ext = '';
+
+  for (let extPart of extParts) {
+    if (extPart.length <= 2) {
+      ext += `.${extPart}`;
+    }
+  }
+
+  // app/vendor use -
+  // chunks use .
+  let shortName = shortPath.split('-')[0];
+  let parts = shortName.split('.');
+
+  shortName = parts[0] + (parts[1] || '');
+
+  return { shortName, ext, withExt: `${shortName}${ext}` };
+}
+
+/**
+ * Shows deltas for time and asset sizes.
+ * Formats the results object to work with console.table.
+ *
+ * @param {Results} results
+ */
 function displayResults(results) {
-  for (let result of Object.values(results)) {
+  let values = Object.values(results);
+  let minTime = Math.min(...values.map((result) => result.time));
+
+  for (let result of values) {
+    result[`Δt`] = deltaPercent(minTime, result.time);
     result.time = prettyMs(result.time);
 
     for (let [filePath, size] of Object.entries(result.sizes)) {
-      let shortPath = filePath.split('dist/assets/')[1];
-      let ext = path.extname(shortPath);
-      // app/vendor use -
-      // chunks use .
-      let shortName = shortPath.split('-')[0] + ' ' + ext;
-      let parts = shortName.split('.');
+      if (filePath.includes('.txt')) continue;
 
-      shortName = parts[0] + parts[1] || '';
+      if (SETTINGS.hideChunks) {
+        if (filePath.includes('chunk')) continue;
+        if (filePath.includes('assets-fingerprint')) continue;
+      }
 
-      result[shortName] = filesize(size, { round: 2 });
+      let { shortName, ext, withExt } = assertShortName(filePath);
+      let minSize = minOf(values, (result) => {
+        // the hash / fingerprint changes between minifiers
+        let key = Object.keys(result.sizes).find(
+          (fullPath) => assertShortName(fullPath).withExt === withExt
+        );
+
+        return result.sizes[key];
+      });
+
+      result[withExt] = filesize(size, { round: 2 });
+      result[`${shortName} Δ${ext}`] = deltaPercent(minSize, size);
     }
-
-    delete result.sizes;
   }
+
+  // Delete the sizes collection, because it won't render well in the table
+  values.forEach((result) => delete result.sizes);
 
   console.table(results);
 }
@@ -129,6 +228,10 @@ function displayResults(results) {
  * @returns {Promise<'npm' | 'yarn'>}
  */
 async function detectDependencyManager() {
+  if (SETTINGS.forceDepManager) {
+    return SETTINGS.forceDepManager;
+  }
+
   let [hasYarnLock, hasPackageLock] = await Promise.all([
     fse.pathExists(path.join(CWD, 'yarn.lock')),
     fse.pathExists(path.join(CWD, 'package-lock.json')),
@@ -143,6 +246,10 @@ async function detectDependencyManager() {
   }
 
   throw new Error('Could not determine dependency manager or dependency manager is not supported');
+}
+
+async function removeDist() {
+  await fse.remove(path.join(CWD, 'dist'));
 }
 
 /**
@@ -182,7 +289,10 @@ async function ensureClassicBuild() {
 }
 
 async function removeMinifiers() {
-  await removeDependencies(SCENARIOS.map((scenario) => scenario.minifier));
+  await removeDependencies([
+    '@nullvoxpopuli/ember-cli-esbuild',
+    ...SCENARIOS.map((scenario) => scenario.minifier),
+  ]);
 }
 
 /**
@@ -266,7 +376,7 @@ async function runCompressors() {
   info(`Running gzip and brotli`);
 
   await gzip({
-    patterns: [`${CWD}/dist/assets/*.{js}`],
+    patterns: [`${CWD}/dist/assets/*.js*`],
     outputExtensions: ['gz', 'br'],
   });
 }
@@ -325,7 +435,7 @@ async function readPackageJson() {
 }
 
 async function writePackageJson(json) {
-  await fs.writeFile(path.join(CWD, 'package.json'), JSON.stringify(json));
+  await fs.writeFile(path.join(CWD, 'package.json'), JSON.stringify(json, null, 2));
 }
 
 async function readBuildFile() {
