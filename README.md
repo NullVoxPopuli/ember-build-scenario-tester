@@ -16,3 +16,11 @@ _for each scenario_:
     - and w/ gzip
     - and w/ brotly
 - outputs stats in an easy to read format
+
+## Usage
+
+1. clone the repo
+2. cd to the repo
+3. run `npm install`
+4. cd to the project you want to test
+5. run `node ../../(etc)/<clone-location>/index.js`
