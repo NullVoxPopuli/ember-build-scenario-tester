@@ -14,7 +14,7 @@ _for each scenario_:
   - records time
   - records sizes
     - and w/ gzip
-    - and w/ brotly
+    - and w/ brotli
 - outputs stats in an easy to read format
 
 ## Usage

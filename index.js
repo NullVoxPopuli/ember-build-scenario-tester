@@ -36,7 +36,7 @@ const SETTINGS = {
    *
    * @type {'npm' | 'yarn'}
    */
-  forceDepManager: 'yarn',
+  // forceDepManager: 'yarn',
 };
 
 const TERSER = 'ember-cli-terser';
@@ -55,7 +55,7 @@ const SCENARIOS = [
     },
   },
   {
-    name: 'Terser w/ no sequences/semicolons',
+    name: 'Terser w/ sequences/semicolons',
     minifier: TERSER,
     appConfig: {
       'ember-cli-terser': {
@@ -110,6 +110,7 @@ async function run() {
       await addDependency(scenario.minifier);
       await applyConfig(scenario.appConfig);
       await installDependencies(depManager);
+      await printVersion(depManager, scenario.minifier);
 
       let time = await productionBuild();
 
@@ -121,6 +122,9 @@ async function run() {
         time,
         sizes,
       };
+    } catch (e) {
+      error(`${scenario.name} errored with ${e.message}`);
+      console.error(e);
     } finally {
       await cleanConfig(scenario.appConfig);
     }
@@ -295,6 +299,39 @@ async function removeMinifiers() {
   ]);
 }
 
+async function printVersion(depManager, depName) {
+  let command = '';
+
+  switch (depManager) {
+    case 'npm':
+      command = 'list';
+
+      break;
+    case 'yarn':
+      command = 'list';
+
+      break;
+    default:
+      throw new Error(`${depManager} not supported`);
+  }
+
+  let { stdout } = await execa(depManager, [command, depName], { cwd: CWD });
+
+  let lines = stdout.split('\n').reverse();
+
+  for (let line of lines) {
+    if (line.includes(depName)) {
+      let match = line.match(new RegExp(`(${depName}@[^ ]+)`))[1];
+
+      if (match) {
+        info(`Using ${match}`);
+
+        return;
+      }
+    }
+  }
+}
+
 /**
  * @param {string} depName
  */
@@ -357,6 +394,12 @@ async function installDependencies(depManager) {
   info(`Installing deps with ${depManager}`);
 
   await execa(depManager, ['install'], { cwd: CWD });
+
+  // Booooooo
+  if (await hasDependency('node-sass')) {
+    info('Rebuilding node-sass....');
+    await execa(`npm`, ['rebuild', 'node-sass'], { cwd: CWD });
+  }
 }
 
 async function productionBuild() {
@@ -399,6 +442,17 @@ async function measureSizes() {
  * Low level helpers?
  *
  */
+
+async function hasDependency(depName) {
+  let json = await readPackageJson();
+
+  let deps = {
+    ...json['dependencies'],
+    ...json['devDependencies'],
+  };
+
+  return Boolean(deps[depName]);
+}
 
 /**
  * @param {string[]} dependencyList
@@ -454,4 +508,8 @@ function announce(text) {
 
 function info(text) {
   console.info(chalk.dim(text));
+}
+
+function error(text) {
+  console.error(chalk.redBright(text));
 }
