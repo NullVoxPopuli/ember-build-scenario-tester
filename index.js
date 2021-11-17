@@ -36,7 +36,14 @@ const SETTINGS = {
    *
    * @type {'npm' | 'yarn'}
    */
-  // forceDepManager: 'yarn',
+  forceDepManager: 'yarn',
+
+  /**
+   * Customize the ENV for the build tasks
+   */
+  env: {
+    // JOBS: 1,
+  },
 };
 
 const TERSER = 'ember-cli-terser';
@@ -101,32 +108,38 @@ async function run() {
 
   // await ensureClassicBuild();
 
-  for (let scenario of SCENARIOS) {
-    announce(`Scenario: ${scenario.name}`);
+  for (let jobs of [1, 3, 7]) {
+    for (let scenario of SCENARIOS) {
+      let name = `JOBS=${jobs} :: ${scenario.name}`;
 
-    try {
-      await removeMinifiers();
-      await removeDist();
-      await addDependency(scenario.minifier);
-      await applyConfig(scenario.appConfig);
-      await installDependencies(depManager);
-      await printVersion(depManager, scenario.minifier);
+      announce(`Scenario: ${name}`);
 
-      let time = await productionBuild();
+      try {
+        SETTINGS.env.JOBS = jobs;
 
-      await runCompressors();
+        await removeMinifiers();
+        await removeDist();
+        await addDependency(scenario.minifier);
+        await applyConfig(scenario.appConfig);
+        await installDependencies(depManager);
+        await printVersion(depManager, scenario.minifier);
 
-      let sizes = await measureSizes();
+        let time = await productionBuild();
 
-      results[scenario.name] = {
-        time,
-        sizes,
-      };
-    } catch (e) {
-      error(`${scenario.name} errored with ${e.message}`);
-      console.error(e);
-    } finally {
-      await cleanConfig(scenario.appConfig);
+        await runCompressors();
+
+        let sizes = await measureSizes();
+
+        results[name] = {
+          time,
+          sizes,
+        };
+      } catch (e) {
+        error(`${name} errored with ${e.message}`);
+        console.error(e);
+      } finally {
+        await cleanConfig(scenario.appConfig);
+      }
     }
   }
 
@@ -407,7 +420,7 @@ async function productionBuild() {
 
   let startTime = new Date().getTime();
 
-  await execa('ember', ['build', '--environment', 'production'], { cwd: CWD });
+  await execa('ember', ['build', '--environment', 'production'], { cwd: CWD, env: SETTINGS.env });
 
   let endTime = new Date().getTime();
   let ms = endTime - startTime;
